@@ -9,15 +9,20 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -26,12 +31,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import us.ttyl.prescriptiontracker.data.local.reminder.FrequencyType
 import us.ttyl.prescriptiontracker.data.local.reminder.MedicationUnit
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 
 private val DAY_LABELS = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 private const val MAX_TIMES_PER_DAY = 5
@@ -46,12 +53,27 @@ private val ALL_TIME_OPTIONS: List<String> = buildList {
 }
 
 private val dateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+private val utcDateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+    timeZone = TimeZone.getTimeZone("UTC")
+}
+
+/** DatePickerState represents selections as UTC midnight millis; convert to local-midnight millis for the same calendar date. */
+private fun utcMillisToLocalMillis(utcMillis: Long): Long {
+    val dateStr = utcDateFormatter.format(java.util.Date(utcMillis))
+    return dateFormatter.parse(dateStr)?.time ?: utcMillis
+}
+
+/** Convert local-midnight millis to the UTC-midnight millis for the same calendar date, for DatePicker's initial value. */
+private fun localMillisToUtcMillis(localMillis: Long): Long {
+    val dateStr = dateFormatter.format(java.util.Date(localMillis))
+    return utcDateFormatter.parse(dateStr)?.time ?: localMillis
+}
 
 /**
  * Dedicated "Add Medication" screen per spec 8.5: name, total quantity, dosage,
  * daily/weekly schedule with up to 5 unique times, optional end date, refill info, notes.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun AddMedicationScreen(
     onSave: (
@@ -79,10 +101,17 @@ fun AddMedicationScreen(
     val selectedDays = remember { mutableStateListOf<Int>() }
     val selectedTimes = remember { mutableStateListOf<String>() }
     var timeMenuExpanded by remember { mutableStateOf(false) }
-    var startDateText by remember { mutableStateOf(dateFormatter.format(Calendar.getInstance().time)) }
-    var endDateText by remember { mutableStateOf("") }
+    var startDateMillis by remember {
+        mutableStateOf<Long?>(parseDate(dateFormatter.format(Calendar.getInstance().time)))
+    }
+    var endDateMillis by remember { mutableStateOf<Long?>(null) }
+    var showStartDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker by remember { mutableStateOf(false) }
     var refillEnabled by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+
+    val startDateText = startDateMillis?.let { dateFormatter.format(java.util.Date(it)) } ?: ""
+    val endDateText = endDateMillis?.let { dateFormatter.format(java.util.Date(it)) } ?: ""
 
     Column(
         modifier = Modifier
@@ -102,6 +131,7 @@ fun AddMedicationScreen(
             value = totalQuantityText,
             onValueChange = { totalQuantityText = it.filter { c -> c.isDigit() } },
             label = { Text("Total quantity") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -109,9 +139,10 @@ fun AddMedicationScreen(
                 value = dosageText,
                 onValueChange = { dosageText = it.filter { c -> c.isDigit() } },
                 label = { Text("Dosage") },
-                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(2f),
             )
-            Box(modifier = Modifier.weight(3f)) {
+            Box(modifier = Modifier.weight(2f)) {
                 OutlinedTextField(
                     value = unit.label(),
                     onValueChange = {},
@@ -139,18 +170,79 @@ fun AddMedicationScreen(
                 }
             }
         }
-        OutlinedTextField(
-            value = startDateText,
-            onValueChange = { startDateText = it },
-            label = { Text("Start date (yyyy-MM-dd)") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = endDateText,
-            onValueChange = { endDateText = it },
-            label = { Text("End date (yyyy-MM-dd, optional — leave blank for ongoing)") },
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = startDateText,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Start date") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showStartDatePicker = true },
+            )
+        }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = endDateText,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("End date (optional — leave blank for ongoing)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showEndDatePicker = true },
+            )
+        }
+
+        if (showStartDatePicker) {
+            val initialUtcMillis = startDateMillis?.let { localMillisToUtcMillis(it) }
+            val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialUtcMillis)
+            DatePickerDialog(
+                onDismissRequest = { showStartDatePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        datePickerState.selectedDateMillis?.let { utcMillis ->
+                            startDateMillis = utcMillisToLocalMillis(utcMillis)
+                        }
+                        showStartDatePicker = false
+                    }) { Text("OK") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showStartDatePicker = false }) { Text("Cancel") }
+                },
+            ) {
+                DatePicker(state = datePickerState)
+            }
+        }
+
+        if (showEndDatePicker) {
+            val initialUtcMillis = endDateMillis?.let { localMillisToUtcMillis(it) }
+            val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialUtcMillis)
+            DatePickerDialog(
+                onDismissRequest = { showEndDatePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        datePickerState.selectedDateMillis?.let { utcMillis ->
+                            endDateMillis = utcMillisToLocalMillis(utcMillis)
+                        }
+                        showEndDatePicker = false
+                    }) { Text("OK") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        endDateMillis = null
+                        showEndDatePicker = false
+                    }) { Text("Clear") }
+                },
+            ) {
+                DatePicker(state = datePickerState)
+            }
+        }
 
         Text("Frequency")
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -245,16 +337,15 @@ fun AddMedicationScreen(
             onClick = {
                 val totalQuantity = totalQuantityText.toIntOrNull()
                 val dosage = dosageText.toIntOrNull()
-                val startDate = parseDate(startDateText)
-                val endDate = if (endDateText.isBlank()) null else parseDate(endDateText)
+                val startDate = startDateMillis
+                val endDate = endDateMillis
 
                 when {
                     name.isBlank() -> error = "Medication name is required"
                     totalQuantity == null || totalQuantity <= 0 -> error = "Total quantity must be a positive number"
                     dosage == null || dosage <= 0 -> error = "Dosage must be a positive number"
                     dosage > totalQuantity -> error = "Dosage cannot exceed total quantity"
-                    startDate == null -> error = "Start date is required (yyyy-MM-dd)"
-                    endDateText.isNotBlank() && endDate == null -> error = "End date is invalid (yyyy-MM-dd)"
+                    startDate == null -> error = "Start date is required"
                     frequencyType == FrequencyType.WEEKLY && selectedDays.isEmpty() ->
                         error = "Select at least one day of the week"
                     selectedTimes.isEmpty() -> error = "Add at least one reminder time"
