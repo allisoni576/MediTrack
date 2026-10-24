@@ -140,9 +140,9 @@ fun AddMedicationScreen(
                 onValueChange = { dosageText = it.filter { c -> c.isDigit() } },
                 label = { Text("Dosage") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(2f),
             )
-            Box(modifier = Modifier.weight(3f)) {
+            Box(modifier = Modifier.weight(2f)) {
                 OutlinedTextField(
                     value = unit.label(),
                     onValueChange = {},
