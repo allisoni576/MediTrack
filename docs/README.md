@@ -1,3 +1,6 @@
+#NOTE: This GitHub page is submitted for both Pono Chung and Allison Ishisaka. 
+
+
 # PrescriptionTracker Docs
 
 ## Android Emulator Setup and Test Commands (Windows / PowerShell)
